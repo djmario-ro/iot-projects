@@ -14,7 +14,7 @@
 
 Protocol 2 requires the phone to reach DoorKey Manager for `/v1/authorize` on
 each attempt. H2 verifies `DoorKey-time-v2` bound to SHA256(permit), without a v1
-fallback. The iOS demo needs its corresponding update. H2 does not contact the
+fallback. The included iOS wallet implements this protocol. H2 does not contact the
 Manager directly: HA downloads the trusted public key and sends it over Matter;
 the phone transports per-attempt authorization proofs over BLE.
 
@@ -132,7 +132,7 @@ All signatures use ECDSA P-256/SHA-256, raw `r || s` format. Command opcode 1 re
 
 Default threshold is -30 dBm, but ESP32 readings differ from iPhone scan readings; recalibrate. The serial command accepts -85 through -20 dBm and reports invalid values. At -30 dBm, rearming requires readings below -42 dBm. Five samples establish the median, followed by 800 ms of stable proximity. Final verification requires recent, sufficiently strong RSSI too. A successful attempt latches the gate until the median stays below threshold minus 12 dB for one second. Reconnection alone does not rearm it. Attempts are at least 10 seconds apart.
 
-The current iOS prototype maintains BLE state restoration/background support. Its **Find another controller** button clears the remembered TTGO connection so it can discover H2 without replacing phone credentials. Locked-screen operation requires the background-capable key configuration and first unlock after reboot. iOS controls wakeups; force-quitting the app prevents reliable background behavior.
+The iOS wallet maintains BLE state restoration/background support. Its **Caută din nou cititorul** action in Diagnostics clears the remembered connection so it can discover another reader. Locked-screen operation requires the background-capable key configuration and first unlock after reboot. iOS controls wakeups; force-quitting the app prevents reliable background behavior.
 
 RSSI is an approximate proximity heuristic, not secure distance measurement or relay-attack protection. This prototype supports one connected phone and a global rearm state; multiple phones require per-credential session/rearm management.
 
@@ -140,7 +140,7 @@ RSSI is an approximate proximity heuristic, not secure distance measurement or r
 
 - Compiled with the installed Arduino ESP32 3.3.12 toolchain.
 - Native proximity tests cover filtering, isolated spikes, stable approach, latch, reconnect, departure, cooldown, stale/missing RSSI and clock wrap.
-- The updated configuration decoder is covered by portable C++ tests. HA transport/key fingerprint tests are in `../home-assistant/tests`; protocol 2 cryptographic integration still needs the updated mobile client and hardware testing.
+- The updated configuration decoder is covered by portable C++ tests. HA transport/key fingerprint tests are in `../home-assistant/tests`; native iOS CryptoKit tests cover protocol 2 signatures. Physical end-to-end mobile/BLE testing is still required.
 - Native logic tests and a successful build do **not** validate radio coexistence, commissioning, event delivery, or iOS background execution. These still require physical testing.
 - Matter's `click()` schedules an event; it does not acknowledge delivery or provide a transactional unlock request.
 - The private door key is generated on the device and stored in NVS. Normal updates retain it; full flash erase loses the identity. HAOS configuration and restart persistence still require the hardware test after flashing.

@@ -95,8 +95,8 @@ is <=16 bytes. Record = version `1` + 2-hex name length + name + base64(uncompre
 remaining <=16 bytes. H2 validates the full record and P-256 point before accepting.
 Matter owns persistence of labels; H2 additionally persists the last accepted record.
 
-Firmware is protocol **2**: it rejects the old `DoorKey-time-v1` proof. iOS still
-needs the new enrollment/authorization flow before opening the door with Manager.
+Firmware and the included iOS wallet use protocol **2**: the reader rejects the old
+`DoorKey-time-v1` proof. Install the updated wallet from Xcode and scan an ERA invitation.
 No lock GPIO or Matter access-event logic is changed by the configuration service.
 
 Validated: firmware builds with Arduino ESP32 3.3.12, native C++ settings/proximity

@@ -1,50 +1,61 @@
-# DoorKey iOS
+# DoorKey iOS wallet
 
-SwiftUI and CoreBluetooth app for the v2 phone GATT protocol implemented by `../esp32-h2/`. Requires a physical iPhone with Secure Enclave and iOS 17+. No external package dependencies.
+SwiftUI/CoreBluetooth app for the H2 + DoorKey Manager protocol 2. The design uses
+ERA's night palette, serif headings, rounded cards and lime actions. The main screen
+is a key wallet; BLE diagnostics live behind the top-right ellipsis menu.
 
-## Run
+## Use
 
-1. Open `DoorKey.xcodeproj` in Xcode.
-2. Under the DoorKey target's **Signing & Capabilities**, select your development Team. Personal signing-team configuration is not checked in. The bundle identifier is `com.mario.doorkey.demo`; change it if needed.
-3. Connect/trust the iPhone, enable Developer Mode if requested, choose it as the destination and Run.
-4. Allow Bluetooth and local-network permissions.
+1. Open `DoorKey.xcodeproj` in Xcode. Keep your development team/signing selection,
+   choose the connected iPhone and Run (⌘R). Requires iOS 17+ and a physical iPhone
+   with Secure Enclave. A simulator cannot enroll real credentials.
+2. Empty wallet: **+** or **Scanează invitația** opens the camera. Allow camera and
+   Bluetooth access. The QR comes from the ERA reservation **after check-in**.
+   A pasted invitation link is available as an alternative inside the scanner.
+3. The phone proves possession of its locally generated key and downloads its signed
+   permit and certified reader public key. Invitation is one-use / ten minutes.
+4. The card displays **Camera 204**, the property name, signed permit expiry in the
+   property timezone, local validity and connection status. Room/property metadata
+   comes from ERA through Manager; the BLE name is not a room display name.
+5. With automatic access enabled, approach the reader. H2 measures proximity and
+   sends a signed challenge. The phone requests `/v1/authorize`; Manager checks ERA
+   live. H2 verifies the permit-bound approval and emits the existing Matter event.
 
-Bluetooth testing requires physical hardware. A simulator build cannot verify radio operation or Secure Enclave behavior.
+There is no Mac Python server URL, shared enrollment token, `/permit` or `/time`
+fallback. The Manager origin and issuer public key are pinned in `TrustConfig.swift`.
+Untrusted QR origins, invalid certificates and redirects are rejected. QR invitation
+secrets are not saved or logged. The app does not learn or export any private key.
 
-## Trust and initial enrollment
+## Keys and lifecycle
 
-`DoorKey/TrustConfig.swift` contains only the public issuer/door keys and the default local test-server URL from the working prototype. No private signing keys or server enrollment tokens are checked in. The device-local firmware key retained in the original development checkout matches these public keys.
+Private key generation uses Secure Enclave. The wrapped reference and wallet are
+stored in Keychain with AfterFirstUnlockThisDeviceOnly accessibility. An installation
+marker lives in the app container: a full uninstall/reinstall creates a new identity;
+ordinary updates/restarts keep it. App offloading retains its container and identity.
+Protected Keychain access failures do not silently replace keys; first-unlock delivery
+retries loading credentials. Legacy local-test credentials are removed on migration.
 
-For a fresh firmware checkout, `../esp32-h2/tools/generate_keys.py` generates new local keys and `.local/trust-config.json`. Update the iOS `issuerPublic` and `doorPublic` values to match, and configure the issuer service with the corresponding issuer private key. Use X9.63 uncompressed P-256 public-key bytes, not PEM text or the private scalar.
+Expired keys remain visible as expired. “În perioada de valabilitate” is based on
+signed permit dates, not a promise that the booking has not been revoked since the
+last online check. Manager refusal is shown as “Acces refuzat”; it never reports an
+open door. Removing a card forgets that local permit; reception still manages server
+revocation. A new QR is needed to enroll it again. One local permit per reader is kept.
 
-The existing prototype issuer service runs on the Mac at port 8765. It is not in this repository yet. In the app, enter its reachable URL and the setup token it displays, then tap **Install / renew permit**. The test service issues a 24-hour permit for door 12 and supplies a signed-time proof for each authentication. Mac and phone must be able to communicate over the local network. This is a local development service, not a guest-facing production enrollment flow.
+Background Bluetooth/state restoration and a short background task during each
+network authorization are retained. Unlock the phone once after reboot. Force-quitting
+can prevent automatic operation; iOS controls wakeups and background time. The app
+maintains one active BLE connection, reconnects the last verified reader and can
+search again from Diagnostics. Multi-reader roaming while maintaining several
+simultaneous BLE connections is not implemented.
 
-The phone generates its own P-256 signing key in Secure Enclave. Its protected key reference, signed permit and enrollment token are stored in Keychain with `AfterFirstUnlockThisDeviceOnly` accessibility. After restarting the phone, unlock it once before testing locked-screen use. This deliberately allows signing without per-operation biometrics after first unlock; private key material is not exported.
+## Validation
 
-## Automatic operation
-
-- Enable automatic access. The app connects to the known controller or scans for its service; it does not decide proximity from scan RSSI.
-- ESP32 measures connection RSSI and notifies READY when proximity qualifies.
-- The app verifies the signed door challenge, fetches issuer-signed time, signs the request and sends it in small write-with-response chunks.
-- ESP32 validates everything and reports ACCEPT:12 or DENY:reason. ACCEPT is not an acknowledgement of delivery to HA or a physical door opening.
-- The BLE connection stays active; ESP32 owns rearming after departure.
-
-**Find another controller (H2 / TTGO)** clears only the remembered BLE peripheral, not the phone key or permit. Use it when switching development boards. For H2, Matter commissioning and Thread attachment must complete before the custom BLE service advertises.
-
-When visible, the app shows RSSI telemetry measured by ESP32. Calibrate using the firmware's serial `THRESH -50` command; the old phone-side -50 dBm threshold is not equivalent.
-
-## Background testing
-
-The app declares `bluetooth-central`, creates its shared manager at application launch, restores CoreBluetooth state, and leaves reconnection pending with iOS. It subscribes to authentication requests; RSSI telemetry is unsubscribed in the background. A bounded background task covers the authentication exchange and local issuer request.
-
-Run once, enroll the permit, and confirm a foreground exchange. Move away until the controller rearms, then return with the app backgrounded or the screen locked. For realistic suspension tests, launch from the app icon without the Xcode debugger attached. After stopping a debug session, launch the app manually once.
-
-iOS schedules discovery/wakeups and can delay them. Force-quitting the app by swiping it away prevents reliable background behavior. Pending reconnection is implemented for the remembered controller; this prototype is not a multi-door roaming implementation.
-
-Locked-screen execution, radio behavior and controller event reception still require testing on the actual phone/H2. A successful unsigned Xcode build does not prove those behaviors.
-
-## Development limitations
-
-The local server is still needed for every `/time` request. Local HTTP is allowed for the prototype and the server token is entered at runtime; production needs proper authenticated enrollment and HTTPS. The app does not implement PMS reservations, revocation or Android functionality.
-
-See `../esp32-h2/README.md` for wire formats, UUIDs, Matter pairing and physical firmware setup.
+- Generic iPhone build: `xcodebuild -project DoorKey.xcodeproj -scheme DoorKey
+  -destination 'generic/platform=iOS' -derivedDataPath /tmp/doorkey-build
+  CODE_SIGNING_ALLOWED=NO build`.
+- Native CryptoKit protocol checks: `python3 tests/run-protocol-tests.py` (macOS/Xcode).
+  Exercises trusted QR parsing, signatures, reader certification, phone/nonce/permit
+  binding, V1 rejection, unsigned 32-bit IDs and wallet encoding.
+- No physical camera scan, Secure Enclave enrollment, BLE unlock or background
+  relaunch has been verified on the phone as part of this source update. Run the
+  signed app on the real iPhone for the end-to-end check.
