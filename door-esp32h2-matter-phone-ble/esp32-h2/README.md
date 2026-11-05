@@ -10,7 +10,7 @@
 4. H2 challenges the phone. It verifies an issuer-signed room permit, a nonce- and permit-bound signed authorization proof, and the phone's P-256 signature.
 5. On success it schedules a Matter button click (InitialPress + ShortRelease). There is **no GPIO/lock actuation** in this firmware.
 
-`ACCEPT:12` reports successful local verification and event scheduling, not confirmation that Home Assistant received the event or opened a door. For an automation, select the press event only, not both press and release. Check the actual event received by HA before connecting an actuator; do not trigger from stale/restored entity state.
+`ACCEPT:<Door ID>` reports successful local verification and event scheduling, not confirmation that Home Assistant received the event or opened a door. For an automation, select the press event only, not both press and release. Check the actual event received by HA before connecting an actuator; do not trigger from stale/restored entity state.
 
 Protocol 2 requires the phone to reach DoorKey Manager for `/v1/authorize` on
 each attempt. H2 verifies `DoorKey-time-v2` bound to SHA256(permit), without a v1
@@ -25,9 +25,15 @@ Install Arduino CLI or Arduino IDE, then install **esp32 by Espressif Systems 3.
 ### Device identity and Manager trust
 
 No `auth_keys.h` is needed or used. First boot generates the reader's P-256
-private key and initial `Door-XXXX` BLE name and saves them in NVS. Restart and
-normal firmware update preserve both. The public key is printed at boot and by
+private key, nonzero random 32-bit Door ID and initial `Door-XXXX` BLE name and saves them in NVS. Restart and
+normal firmware update preserve them. The public key is printed at boot and by
 `IDENTITY` / `STATUS`; the private key is never printed.
+
+When updating the first dynamic-key firmware (which still used hardcoded ID 12),
+only the missing Door ID is generated: the private key and BLE name are kept.
+The same ID is used in signed challenges, permit checks and authorization results.
+Random IDs are not mathematically guaranteed unique; Manager rejects a duplicate
+registration instead of overwriting another reader. Never erase flash to rename.
 
 On the first update from the old static-key prototype, a new identity is generated.
 Register the new public key in ERA. Existing immutable reader mappings need a

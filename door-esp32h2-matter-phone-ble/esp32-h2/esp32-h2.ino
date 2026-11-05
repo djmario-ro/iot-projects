@@ -23,6 +23,7 @@ extern "C" {
 }
 #include "config.h"
 #include "ReaderSettings.h"
+#include "PersistentDoorId.h"
 #include "ProximityGate.h"
 #if !CONFIG_IDF_TARGET_ESP32H2 || !CONFIG_BT_NIMBLE_ENABLED
 #error Requires ESP32-H2 with Matter + NimBLE
@@ -30,7 +31,7 @@ extern "C" {
 #if CONFIG_USE_BLE_ONLY_FOR_COMMISSIONING
 #error Matter must retain NimBLE after commissioning
 #endif
-constexpr uint32_t DOOR_ID=12;
+uint32_t doorId=0;
 constexpr size_t PERMIT_SIZE=150,AUTH_SIZE=286;
 MatterGenericSwitch accessSwitch;
 char bleDeviceName[30]{};
@@ -77,7 +78,7 @@ int rng(void *, unsigned char *out, size_t count) { esp_fill_random(out, count);
 void hash(const uint8_t *data, size_t size, uint8_t out[32]) { mbedtls_sha256(data, size, out, 0); }
 uint64_t read64(const uint8_t *p) { uint64_t v=0; for(int i=7;i>=0;--i) v=(v<<8)|p[i]; return v; }
 uint32_t read32(const uint8_t *p) { return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24); }
-void writeDoor(uint8_t *p) { p[0]=12;p[1]=p[2]=p[3]=0; }
+void writeDoor(uint8_t *p) { encodeDoorId(doorId,p); }
 
 bool verify(const uint8_t pub[65], const uint8_t *message, size_t length, const uint8_t signature[64]) {
   uint8_t digest[32];hash(message,length,digest);
@@ -127,7 +128,7 @@ void authenticate() {
   if(!fresh){result("DENY:STALE");return;}
   if(packetLength!=AUTH_SIZE){result("DENY:LENGTH");return;}
   if(!issuerConfigured){result("DENY:NO_ISSUER");return;}
-  if(packet[0]!=1 || read32(packet+1)!=DOOR_ID){result("DENY:DOOR");return;}
+  if(packet[0]!=1 || read32(packet+1)!=doorId){result("DENY:DOOR");return;}
   if(!verify(issuerPublic,packet,86,packet+86)){result("DENY:PERMIT");return;}
   uint8_t timeMessage[sizeof("DoorKey-time-v2")-1+60];
   const size_t td=sizeof("DoorKey-time-v2")-1;
@@ -146,8 +147,8 @@ void authenticate() {
   gate.accept();
   accessSwitch.click();
   Serial.print("[MATTER] InitialPress access event scheduled (delivery not acknowledged)\r\n");
-  result("ACCEPT:12");
-  Serial.print("[ACCESS] Telefon autorizat pentru Door-12. Eveniment local disponibil.\r\n");
+  char accepted[24];snprintf(accepted,sizeof(accepted),"ACCEPT:%u",doorId);result(accepted);
+  Serial.printf("[ACCESS] Telefon autorizat pentru %s (ID=%u). Eveniment local disponibil.\r\n",bleDeviceName,doorId);
   // Integrate the already-existing actuation here, when requested. No GPIO changes.
 }
 
@@ -235,7 +236,7 @@ bool validPublicKey(const uint8_t pub[65]) {
  mbedtls_ecp_point_free(&p);mbedtls_ecp_group_free(&g);return rc==0;
 }
 void printIdentity(){
- Serial.printf("[IDENTITY] Door ID=%u BLE=%s Protocol=2\r\n",DOOR_ID,bleDeviceName);
+ Serial.printf("[IDENTITY] Door ID=%u BLE=%s Protocol=2\r\n",doorId,bleDeviceName);
  Serial.print("[IDENTITY] ESP32 public key: ");for(uint8_t b:doorPublic)Serial.printf("%02x",b);Serial.print("\r\n");
  Serial.print("[IDENTITY] Manager SHA256: ");uint8_t digest[32];hash(issuerPublic,65,digest);
  if(issuerConfigured){for(uint8_t b:digest)Serial.printf("%02x",b);}else Serial.print("UNCONFIGURED");Serial.print("\r\n");
@@ -256,6 +257,7 @@ bool loadIdentity(){
  if(!rc)rc=mbedtls_ecp_mul(&g,&q,&d,&g.G,rng,nullptr);
  size_t length=0;if(!rc)rc=mbedtls_ecp_point_write_binary(&g,&q,MBEDTLS_ECP_PF_UNCOMPRESSED,&length,doorPublic,65);
  if(!rc&&!saved&&p.putBytes("private",doorPrivate,32)!=32)rc=-1;
+ if(!rc&&!loadPersistentDoorId(p,[](){return esp_random();},doorId))rc=-1;
  if(!rc){
   String initialName=p.getString("initial_name","");
   if(!ReaderSettings::validName(initialName.c_str(),initialName.length())){

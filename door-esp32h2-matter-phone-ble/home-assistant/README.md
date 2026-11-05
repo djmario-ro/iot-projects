@@ -41,7 +41,7 @@ Matter-over-Thread connection. The H2's private key never leaves the device.
    iOS scanner caches may require disconnecting/scanning again. Run `IDENTITY` to
    print the reader public key and configured Manager fingerprint.
 6. In ERA's room DoorKey settings, use the numerical **Door ID printed by IDENTITY**
-   (currently 12) and the new **ESP32 public key**, not the Manager public key.
+   (random and persistent) and the **ESP32 public key**, not the Manager public key.
 
 To rename BLE again without downloading/replacing the Manager key:
 
@@ -65,8 +65,10 @@ confirms Matter storage; the H2 applies settings on its next loop (about one sec
 
 ## Persistence / identity
 
-- First boot generates a P-256 device key with the H2 random source and stores it in
-  NVS, together with an initial `Door-XXXX` name derived from its public-key hash.
+- First boot generates a P-256 device key and a nonzero random 32-bit Door ID with
+  the H2 random source and stores them in NVS, together with an initial `Door-XXXX`
+  name derived from its public-key hash. Updating from the hardcoded-ID-12 firmware
+  creates just the missing ID and preserves the existing key/name.
 - Restart and normal firmware update reuse that identity. HA name/key changes do not
   regenerate the device private key. A malformed stored private key fails closed.
 - No issuer key is trusted on a clean install until configured through Matter.
