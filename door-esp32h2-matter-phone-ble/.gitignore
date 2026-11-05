@@ -1,0 +1,11 @@
+# Device-specific keys and generated local material
+**/auth_keys.h
+**/.local/
+**/.venv/
+**/__pycache__/
+**/build/
+*.bin
+*.elf
+*.map
+*.pem
+.DS_Store
