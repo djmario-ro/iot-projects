@@ -26,5 +26,12 @@ int main(){
  // Unsigned time arithmetic remains safe across millis wrap.
  ProximityGate wrap;for(unsigned i=0;i<12;i++)wrap.sample(-45,0xfffff800u+i*250u);
  assert(wrap.canRequest(0xfffff800u+2750u));
+ ProximityGate calibrated;calibrated.threshold=-30;
+ for(unsigned t=0;t<=3000;t+=250)calibrated.sample(-25,t);
+ assert(calibrated.canRequest(3000));calibrated.attempt(3000);calibrated.accept();
+ for(unsigned t=3250;t<=6000;t+=250)calibrated.sample(-40,t);
+ assert(calibrated.isLatched());
+ for(unsigned t=6250;t<=9000;t+=250)calibrated.sample(-50,t);
+ assert(!calibrated.isLatched());
  puts("PASS: proximity median, spike rejection, stable approach, latch, reconnect, departure rearm, cooldown, stale RSSI, gaps, millis wrap");
 }

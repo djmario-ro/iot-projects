@@ -72,7 +72,7 @@ Commands on the physical serial console:
 
 - `PAIR`: prints the initial manual pairing code and QR URL; it does not reopen a closed commissioning window.
 - `STATUS`: Matter, Thread, BLE and heap status.
-- `THRESH -50`: sets the RSSI threshold until reset; edit `config.h` for a persistent build default.
+- `THRESH -30`: sets the RSSI threshold until reset; edit `config.h` for a persistent build default.
 - `FACTORY RESET`: removes Matter/Thread enrollment using the SDK reset path; commissioning must be repeated.
 
 ## Thread, Matter and pairing
@@ -118,7 +118,7 @@ All signatures use ECDSA P-256/SHA-256, raw `r || s` format. Command opcode 1 re
 
 ## Proximity and background operation
 
-Default threshold is -50 dBm, but ESP32 readings differ from iPhone scan readings; recalibrate. Five samples establish the median, followed by 800 ms of stable proximity. Final verification requires recent, sufficiently strong RSSI too. A successful attempt latches the gate until the median stays below threshold minus 12 dB for one second. Reconnection alone does not rearm it. Attempts are at least 10 seconds apart.
+Default threshold is -30 dBm, but ESP32 readings differ from iPhone scan readings; recalibrate. The serial command accepts -85 through -20 dBm and reports invalid values. At -30 dBm, rearming requires readings below -42 dBm. Five samples establish the median, followed by 800 ms of stable proximity. Final verification requires recent, sufficiently strong RSSI too. A successful attempt latches the gate until the median stays below threshold minus 12 dB for one second. Reconnection alone does not rearm it. Attempts are at least 10 seconds apart.
 
 The current iOS prototype maintains BLE state restoration/background support. Its **Find another controller** button clears the remembered TTGO connection so it can discover H2 without replacing phone credentials. Locked-screen operation requires the background-capable key configuration and first unlock after reboot. iOS controls wakeups; force-quitting the app prevents reliable background behavior.
 

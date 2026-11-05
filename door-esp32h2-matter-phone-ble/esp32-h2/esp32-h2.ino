@@ -242,7 +242,7 @@ void setup(){
     Serial.printf("[MATTER] event=%u\r\n",unsigned(type));
   });
   Matter.begin();result("IDLE");printPairing();
-  Serial.print("[INFO] Pair Matter first. Door BLE starts after Thread attachment. Commands: PAIR / STATUS / THRESH -50 / FACTORY RESET\r\n");
+  Serial.print("[INFO] Pair Matter first. Door BLE starts after Thread attachment. Commands: PAIR / STATUS / THRESH -30 / FACTORY RESET\r\n");
 }
 void loop(){
   static uint32_t lastState=0;
@@ -292,7 +292,13 @@ void loop(){
       if(line=="PAIR")printPairing();
       else if(line=="STATUS")Serial.printf("[STATUS] Matter=%d Thread=%d BLE=%d heap=%u\r\n",c,t,linked,ESP.getFreeHeap());
       else if(line=="FACTORY RESET"){Serial.print("[RESET] Removing Matter/Thread enrollment\r\n");Matter.decommission();}
-      else if(line.startsWith("THRESH ")){int v=line.substring(7).toInt();if(v>=-85 && v<=-35){gate.threshold=v;gate.resetSamples();challengeValid=false;receiving=false;Serial.printf("[CONFIG] Threshold=%d\r\n",v);}}
+      else if(line.startsWith("THRESH ")){
+        int v=line.substring(7).toInt();
+        if(v>=-85 && v<=-20){
+          gate.threshold=v;gate.resetSamples();challengeValid=false;receiving=false;
+          Serial.printf("[CONFIG] Threshold=%d\r\n",v);
+        }else Serial.print("[CONFIG] Invalid threshold; use -85 through -20 dBm\r\n");
+      }
       line="";
     }else if(line.length()<40)line+=ch;
   }
