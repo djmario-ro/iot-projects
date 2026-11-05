@@ -12,6 +12,7 @@
 #include <atomic>
 #include <vector>
 #include <platform/DeviceInfoProvider.h>
+#include <app/server/Server.h>
 #include <mbedtls/base64.h>
 extern "C" {
 #include <host/ble_hs.h>
@@ -24,6 +25,7 @@ extern "C" {
 #include "config.h"
 #include "ReaderSettings.h"
 #include "PersistentDoorId.h"
+#include "DoorLabelProvider.h"
 #include "ProximityGate.h"
 #if !CONFIG_IDF_TARGET_ESP32H2 || !CONFIG_BT_NIMBLE_ENABLED
 #error Requires ESP32-H2 with Matter + NimBLE
@@ -34,6 +36,7 @@ extern "C" {
 uint32_t doorId=0;
 constexpr size_t PERMIT_SIZE=150,AUTH_SIZE=286;
 MatterGenericSwitch accessSwitch;
+DoorLabelProvider doorLabelProvider;
 char bleDeviceName[30]{};
 uint8_t issuerPublic[65]{},doorPrivate[32]{},doorPublic[65]{};
 bool issuerConfigured=false;
@@ -42,6 +45,7 @@ QueueHandle_t configEvents;
 bool doorAdvertising=false;
 std::atomic<bool> commissioningWindow{false};
 std::atomic<bool> configReadPending{false};
+std::atomic<bool> labelStorageReady{false};
 
 ProximityGate gate;
 uint8_t nonce[16],packet[AUTH_SIZE];size_t packetLength=0;
@@ -340,7 +344,18 @@ void setup(){
     commissioned.store(Matter.isDeviceCommissioned());threadAttached.store(Matter.isThreadConnected());
     Serial.printf("[MATTER] event=%u\r\n",unsigned(type));
   });
-  Matter.begin();result("IDLE");printPairing();
+  Matter.begin();
+  // The Arduino prebuilt SDK selects CONFIG_NONE_DEVICE_INFO_PROVIDER. The
+  // UserLabel cluster exists, but all writes fail until its provider/storage are bound.
+  chip::DeviceLayer::SystemLayer().ScheduleLambda([](){
+    auto* provider=chip::DeviceLayer::GetDeviceInfoProvider();
+    if(!provider)provider=&doorLabelProvider;
+    provider->SetStorageDelegate(&chip::Server::GetInstance().GetPersistentStorage());
+    chip::DeviceLayer::SetDeviceInfoProvider(provider);
+    labelStorageReady.store(true);
+    Serial.print("[CONFIG] Matter UserLabel persistence ready\r\n");
+  });
+  result("IDLE");printPairing();
   Serial.print("[INFO] Pair Matter first. Door BLE starts after Thread attachment. Commands: PAIR / STATUS / IDENTITY / THRESH -30 / FACTORY RESET\r\n");
 }
 void loop(){
@@ -356,7 +371,7 @@ void loop(){
   if(c!=oldC || t!=oldT){oldC=c;oldT=t;Serial.printf("[MATTER] commissioned=%d thread=%d\r\n",c,t);}
   ConfigSnapshot configUpdate{};if(xQueueReceive(configEvents,&configUpdate,0)==pdTRUE)applyConfig(configUpdate.payload,configUpdate.length,true);
   static uint32_t lastConfigRead=0;
-  if(c&&millis()-lastConfigRead>=1000&&!configReadPending.exchange(true)){lastConfigRead=millis();readMatterConfig();}
+  if(c&&labelStorageReady.load()&&millis()-lastConfigRead>=1000&&!configReadPending.exchange(true)){lastConfigRead=millis();readMatterConfig();}
   Event e;
   while(xQueueReceive(events,&e,0)==pdTRUE){
     if(e.kind==1){

@@ -24,6 +24,11 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(p.checked_key(KEY.hex(),digest),KEY)
         with self.assertRaises(ValueError):p.checked_key(KEY.hex(),'0'*64)
         with self.assertRaises(ValueError):p.checked_key(('04'+'00'*64),digest)
+    def test_write_status_distinguishes_refusal_from_missing_ack(self):
+        p.check_write_result([{'Status':0}])
+        p.check_write_result([{'status':0}])
+        with self.assertRaisesRegex(ValueError, 'status=1'):p.check_write_result([{'Status':1}])
+        with self.assertRaisesRegex(ValueError, 'no write status'):p.check_write_result(None)
     def test_names_and_keys_are_bounded(self):
         for name in ('','x'*30,'Door\n12','Ușă'):
             with self.assertRaises(ValueError):p.encode(name,KEY)

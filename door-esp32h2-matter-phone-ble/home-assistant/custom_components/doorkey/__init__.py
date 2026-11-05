@@ -12,7 +12,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service import async_register_admin_service
 
-from .protocol import checked_key, decode, encode, valid_name
+from .protocol import check_write_result, checked_key, decode, encode, valid_name
 
 DOMAIN = "doorkey"
 CONFIG_SCHEMA = vol.Schema({DOMAIN: vol.Schema({})}, extra=vol.ALLOW_EXTRA)
@@ -41,8 +41,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def write(client, node, path, labels):
         result = await client.write_attribute(node, path, [{"0": item["label"], "1": item["value"]} for item in labels])
-        if not isinstance(result, list) or not result or any(r.get("Status", r.get("status", -1)) != 0 for r in result):
-            raise HomeAssistantError("Matter configuration write was not acknowledged")
+        check_write_result(result)
         # Confirm the device's value, not only the server's optimistic cache.
         actual = await read(client, node, path)
         if decode(actual) != decode(labels):

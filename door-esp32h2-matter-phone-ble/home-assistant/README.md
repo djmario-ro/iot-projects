@@ -84,6 +84,11 @@ confirms Matter storage; the H2 applies settings on its next loop (about one sec
 
 Uses standard UserLabel `endpoint/65/0`, already present on the Generic Switch,
 so no custom Matter Server cluster definitions or extra endpoints are required.
+The firmware explicitly installs a persistent DeviceInfoProvider because the Arduino
+prebuilt SDK uses CONFIG_NONE_DEVICE_INFO_PROVIDER. Without this initialization,
+UserLabel reads appear empty and writes fail with Matter status 1. Boot must print
+`[CONFIG] Matter UserLabel persistence ready`.
+
 The four labels are reserved for one encoded configuration record. Each label/value
 is <=16 bytes. Record = version `1` + 2-hex name length + name + base64(uncompressed
 65-byte key). Split into 30-byte parts; label `D0`..`D3` + first 14 bytes, value the

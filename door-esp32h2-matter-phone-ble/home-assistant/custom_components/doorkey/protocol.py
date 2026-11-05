@@ -52,3 +52,14 @@ def decode(labels):
     if len(payload) != 3+n+88 or len(key) != 65 or key[0] != 4:
         raise ValueError("Invalid key payload")
     return name, key
+
+
+def check_write_result(result):
+    if not isinstance(result, list) or not result:
+        raise ValueError("Matter Server returned no write status")
+    statuses = [item.get("Status", item.get("status", -1)) for item in result if isinstance(item, dict)]
+    if len(statuses) != len(result):
+        raise ValueError("Matter Server returned an unsupported write status format")
+    failures = [status for status in statuses if status != 0]
+    if failures:
+        raise ValueError("H2 rejected Matter UserLabel write (status=" + ",".join(str(s) for s in failures) + "). Check the H2 firmware/storage initialization.")
