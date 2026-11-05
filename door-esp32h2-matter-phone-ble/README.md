@@ -11,7 +11,7 @@ A prototype for phone-based access: the phone authenticates over BLE, the ESP32-
 
 - [`esp32-h2/`](esp32-h2/): firmware, build/flash tools and setup instructions.
 - [`ios/`](ios/): SwiftUI/CoreBluetooth iPhone app and Xcode project.
-- `android/`: reserved for a future Android app; not included yet.
+- [`android/`](android/): native Kotlin/Compose Android wallet, QR enrollment and automatic BLE access (Android 12+).
 
 The H2 needs **at least 4 MB flash** for this build. A Thread border router (such as a compatible IKEA DIRIGERA) and a Matter controller (such as Home Assistant) are required. Enrolling DIRIGERA's bridge in Home Assistant does not automatically enroll this device.
 
