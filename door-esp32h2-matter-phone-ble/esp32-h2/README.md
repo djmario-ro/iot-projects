@@ -7,33 +7,39 @@
 1. Commission the H2 as a Matter-over-Thread Generic Switch.
 2. After it has a Matter fabric and is attached to Thread, it advertises the custom phone BLE service.
 3. The phone maintains a connection. H2 measures connection RSSI every 250 ms, using a five-sample median and stable-approach threshold.
-4. H2 challenges the phone. It verifies an issuer-signed room permit, a nonce-bound signed-time proof, and the phone's P-256 signature.
+4. H2 challenges the phone. It verifies an issuer-signed room permit, a nonce- and permit-bound signed authorization proof, and the phone's P-256 signature.
 5. On success it schedules a Matter button click (InitialPress + ShortRelease). There is **no GPIO/lock actuation** in this firmware.
 
 `ACCEPT:12` reports successful local verification and event scheduling, not confirmation that Home Assistant received the event or opened a door. For an automation, select the press event only, not both press and release. Check the actual event received by HA before connecting an actuator; do not trigger from stale/restored entity state.
 
-The current protocol still requires the phone to reach the local Mac/PMS issuer service for signed time. The issuer service is not included yet; the iOS app is in `../ios/`. Thread transport does not remove that dependency.
+Protocol 2 requires the phone to reach DoorKey Manager for `/v1/authorize` on
+each attempt. H2 verifies `DoorKey-time-v2` bound to SHA256(permit), without a v1
+fallback. The iOS demo needs its corresponding update. H2 does not contact the
+Manager directly: HA downloads the trusted public key and sends it over Matter;
+the phone transports per-attempt authorization proofs over BLE.
 
 ## Build
 
 Install Arduino CLI or Arduino IDE, then install **esp32 by Espressif Systems 3.3.12** through Boards Manager. The required Matter, NimBLE, Preferences and mbedTLS components are included. Do not add the Arduino BLE library or initialize a second BLE host: Matter owns NimBLE.
 
-### Keys on a fresh clone
+### Device identity and Manager trust
 
-Private keys are not tracked. Generate local test material before building:
+No `auth_keys.h` is needed or used. First boot generates the reader's P-256
+private key and initial `Door-XXXX` BLE name and saves them in NVS. Restart and
+normal firmware update preserve both. The public key is printed at boot and by
+`IDENTITY` / `STATUS`; the private key is never printed.
 
-```bash
-cd esp32-h2
-python3 -m venv .venv
-.venv/bin/python -m pip install cryptography
-.venv/bin/python tools/generate_keys.py
-```
+On the first update from the old static-key prototype, a new identity is generated.
+Register the new public key in ERA. Existing immutable reader mappings need a
+revoke-and-replace workflow if they already contain the old prototype key.
 
-The generator creates ignored `auth_keys.h`, private PEM files under `.local/`, and `.local/trust-config.json` containing the public keys for the phone/issuer configuration. It refuses to overwrite existing keys.
+Configure the BLE name and trusted Manager public key from HAOS using the
+[DoorKey configuration integration](../home-assistant/README.md). H2 keeps the
+last accepted name and issuer key in NVS. The clean-device state has no issuer
+trusted and refuses access until configured. Never erase flash merely to rename.
 
-The **issuer private key belongs only on the issuer/PMS**. The H2 stores its own test private key plus the issuer public key. The phone has its own private key and trusts the matching issuer/door public keys. Configure all components consistently; independently generated keys will not work with an older phone app or issuer service.
-
-On the original development checkout, the existing prototype `auth_keys.h` was retained locally and ignored, preserving compatibility with the current iOS app. It is intentionally absent from GitHub. The issuer private key was not copied into this repository.
+The legacy `tools/generate_keys.py` utility is retained for old test material;
+its files are not included by this firmware.
 
 ### Compile
 
@@ -47,7 +53,7 @@ The script uses Arduino CLI from PATH or the macOS Arduino IDE bundle. Set `ARDU
 esp32:esp32:esp32h2:CDCOnBoot=default,FlashSize=4M,PartitionScheme=huge_app
 ```
 
-Images go into ignored `build/`. No firmware binaries are committed because the application embeds the device's prototype private key.
+Images go into ignored `build/`. No firmware binaries are committed because the application is built for local installation.
 
 ## Flash and serial console
 
@@ -111,7 +117,7 @@ After subscribing to Result, the phone writes opcode 5 (LISTEN). H2 sends READY 
 The authentication packet is 286 bytes:
 
 - Permit150: version1 + door LE32 + notBefore LE64 + notAfter LE64 + phone public key X9.63(65) + issuer signature64 over the preceding 86 bytes.
-- Time72: epoch LE64 + issuer signature64 over `DoorKey-time-v1 || door || nonce || epoch`.
+- Time72: epoch LE64 + issuer signature64 over `DoorKey-time-v2 || door || nonce || epoch || SHA256(permit)`.
 - Phone signature64 over `DoorKey-auth-v1 || door || nonce || SHA256(permit || time)`.
 
 All signatures use ECDSA P-256/SHA-256, raw `r || s` format. Command opcode 1 resets the receive buffer, opcode 2 appends up to 19 bytes per write, opcode 3 verifies/consumes the challenge, and opcode 4 aborts. Use write-with-response. A challenge expires after 30 seconds and is consumed after a verification attempt, including failures.
@@ -128,10 +134,10 @@ RSSI is an approximate proximity heuristic, not secure distance measurement or r
 
 - Compiled with the installed Arduino ESP32 3.3.12 toolchain.
 - Native proximity tests cover filtering, isolated spikes, stable approach, latch, reconnect, departure, cooldown, stale/missing RSSI and clock wrap.
-- Development authentication tests execute the H2 verification function with real P-256 signatures and a simulated Matter endpoint: one click for a valid response, no click for replay/tampering/expiry/wrong door/offline state.
+- The updated configuration decoder is covered by portable C++ tests. HA transport/key fingerprint tests are in `../home-assistant/tests`; protocol 2 cryptographic integration still needs the updated mobile client and hardware testing.
 - Native logic tests and a successful build do **not** validate radio coexistence, commissioning, event delivery, or iOS background execution. These still require physical testing.
 - Matter's `click()` schedules an event; it does not acknowledge delivery or provide a transactional unlock request.
-- The private door key is embedded in the prototype firmware. Production needs proper per-device provisioning, key protection, guest authorization/revocation and end-to-end operation semantics.
+- The private door key is generated on the device and stored in NVS. Normal updates retain it; full flash erase loses the identity. HAOS configuration and restart persistence still require the hardware test after flashing.
 
 Run the portable proximity test with a C++17 compiler:
 

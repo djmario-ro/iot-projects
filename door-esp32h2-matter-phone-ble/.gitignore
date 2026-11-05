@@ -9,3 +9,7 @@
 *.map
 *.pem
 .DS_Store
+
+# Home Assistant / Python test caches
+__pycache__/
+*.pyc

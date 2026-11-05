@@ -1,0 +1,54 @@
+configure_reader:
+  name: Configure reader
+  description: Download and pin the Manager public key, and save the BLE name on the H2 over Matter.
+  fields:
+    device_id:
+      name: H2 Matter device
+      required: true
+      selector:
+        device:
+          integration: matter
+    endpoint:
+      name: Matter endpoint
+      default: 1
+      selector:
+        number: {min: 1, max: 65534, mode: box}
+    ble_name:
+      name: BLE name
+      required: true
+      example: Door-204
+      selector:
+        text:
+    manager_url:
+      name: DoorKey Manager URL
+      required: true
+      example: https://doorkey-staging.cloud.retreat480.com
+      selector:
+        text:
+    expected_sha256:
+      name: Trusted Manager public-key SHA-256
+      description: Obtain independently from your operator configuration; do not blindly trust a downloaded key.
+      required: true
+      selector:
+        text:
+set_ble_name:
+  name: Set BLE name
+  description: Change the reader's advertised BLE name while keeping the configured Manager key.
+  fields:
+    device_id:
+      name: H2 Matter device
+      required: true
+      selector:
+        device:
+          integration: matter
+    endpoint:
+      name: Matter endpoint
+      default: 1
+      selector:
+        number: {min: 1, max: 65534, mode: box}
+    ble_name:
+      name: BLE name
+      required: true
+      example: Door-204
+      selector:
+        text:

@@ -1,0 +1,1 @@
+{"domain":"doorkey","name":"DoorKey Reader Configuration","version":"0.1.0","documentation":"https://github.com/djmario-ro/iot-projects/tree/main/door-esp32h2-matter-phone-ble/home-assistant","dependencies":["matter"],"codeowners":[],"iot_class":"local_push","requirements":[]}

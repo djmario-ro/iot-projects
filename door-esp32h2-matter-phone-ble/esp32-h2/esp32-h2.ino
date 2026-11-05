@@ -11,6 +11,8 @@
 #include <bootloader_random.h>
 #include <atomic>
 #include <vector>
+#include <platform/DeviceInfoProvider.h>
+#include <mbedtls/base64.h>
 extern "C" {
 #include <host/ble_hs.h>
 #include <host/ble_gap.h>
@@ -20,7 +22,7 @@ extern "C" {
 #include <services/gap/ble_svc_gap.h>
 }
 #include "config.h"
-#include "auth_keys.h"
+#include "ReaderSettings.h"
 #include "ProximityGate.h"
 #if !CONFIG_IDF_TARGET_ESP32H2 || !CONFIG_BT_NIMBLE_ENABLED
 #error Requires ESP32-H2 with Matter + NimBLE
@@ -31,6 +33,15 @@ extern "C" {
 constexpr uint32_t DOOR_ID=12;
 constexpr size_t PERMIT_SIZE=150,AUTH_SIZE=286;
 MatterGenericSwitch accessSwitch;
+char bleDeviceName[30]{};
+uint8_t issuerPublic[65]{},doorPrivate[32]{},doorPublic[65]{};
+bool issuerConfigured=false;
+struct ConfigSnapshot { char payload[121]; size_t length; };
+QueueHandle_t configEvents;
+bool doorAdvertising=false;
+std::atomic<bool> commissioningWindow{false};
+std::atomic<bool> configReadPending{false};
+
 ProximityGate gate;
 uint8_t nonce[16],packet[AUTH_SIZE];size_t packetLength=0;
 uint32_t challengeCreatedAt=0,lastRssiRequest=0,lastRssiLog=0;
@@ -86,7 +97,7 @@ bool signDoor(const uint8_t *message,size_t length,uint8_t signature[64]) {
   mbedtls_ecp_group group;mbedtls_mpi d,r,s;
   mbedtls_ecp_group_init(&group);mbedtls_mpi_init(&d);mbedtls_mpi_init(&r);mbedtls_mpi_init(&s);
   int rc=mbedtls_ecp_group_load(&group,MBEDTLS_ECP_DP_SECP256R1);
-  if(!rc)rc=mbedtls_mpi_read_binary(&d,DOOR_PRIVATE,32);
+  if(!rc)rc=mbedtls_mpi_read_binary(&d,doorPrivate,32);
   if(!rc)rc=mbedtls_ecdsa_sign(&group,&r,&s,&d,digest,32,rng,nullptr);
   if(!rc)rc=mbedtls_mpi_write_binary(&r,signature,32);
   if(!rc)rc=mbedtls_mpi_write_binary(&s,signature+32,32);
@@ -115,13 +126,15 @@ void authenticate() {
   challengeValid=false;receiving=false;
   if(!fresh){result("DENY:STALE");return;}
   if(packetLength!=AUTH_SIZE){result("DENY:LENGTH");return;}
+  if(!issuerConfigured){result("DENY:NO_ISSUER");return;}
   if(packet[0]!=1 || read32(packet+1)!=DOOR_ID){result("DENY:DOOR");return;}
-  if(!verify(ISSUER_PUBLIC,packet,86,packet+86)){result("DENY:PERMIT");return;}
-  uint8_t timeMessage[sizeof("DoorKey-time-v1")-1+28];
-  const size_t td=sizeof("DoorKey-time-v1")-1;
-  memcpy(timeMessage,"DoorKey-time-v1",td);writeDoor(timeMessage+td);
+  if(!verify(issuerPublic,packet,86,packet+86)){result("DENY:PERMIT");return;}
+  uint8_t timeMessage[sizeof("DoorKey-time-v2")-1+60];
+  const size_t td=sizeof("DoorKey-time-v2")-1;
+  memcpy(timeMessage,"DoorKey-time-v2",td);writeDoor(timeMessage+td);
   memcpy(timeMessage+td+4,nonce,16);memcpy(timeMessage+td+20,packet+150,8);
-  if(!verify(ISSUER_PUBLIC,timeMessage,sizeof(timeMessage),packet+158)){result("DENY:TIME_PROOF");return;}
+  hash(packet,PERMIT_SIZE,timeMessage+td+28);
+  if(!verify(issuerPublic,timeMessage,sizeof(timeMessage),packet+158)){result("DENY:TIME_PROOF");return;}
   uint64_t now=read64(packet+150),start=read64(packet+5),end=read64(packet+13);
   if(end<=start || now<start || now>=end){result("DENY:EXPIRED");return;}
   uint8_t message[sizeof("DoorKey-auth-v1")-1+52];
@@ -180,7 +193,7 @@ int gapEvent(ble_gap_event *event,void*){
     if(event->subscribe.attr_handle==resultValue.handle)resultValue.subscribed.store(event->subscribe.cur_notify);
     if(event->subscribe.attr_handle==telemetryValue.handle)telemetryValue.subscribed.store(event->subscribe.cur_notify);
   }
-  if(event->type==BLE_GAP_EVENT_CONNECT){if(event->connect.status==0){resultValue.subscribed.store(false);telemetryValue.subscribed.store(false);e.kind=1;e.connection=event->connect.conn_handle;enqueue(e);}}
+  if(event->type==BLE_GAP_EVENT_CONNECT){doorAdvertising=false;if(event->connect.status==0){resultValue.subscribed.store(false);telemetryValue.subscribed.store(false);e.kind=1;e.connection=event->connect.conn_handle;enqueue(e);}}
   if(event->type==BLE_GAP_EVENT_DISCONNECT){resultValue.subscribed.store(false);telemetryValue.subscribed.store(false);e.kind=2;e.connection=event->disconnect.conn.conn_handle;enqueue(e);}
   return 0;
 }
@@ -197,31 +210,113 @@ void configureDoorGatt(){
 }
 void startDoorAdvertising(){
   if(!challengeValue.handle || !resultValue.handle || !matterReady() || !ble_hs_synced() || linked || ble_gap_adv_active())return;
+  ble_svc_gap_device_name_set(bleDeviceName);
   uint8_t ownType;if(ble_hs_id_infer_auto(0,&ownType)!=0)return;
   ble_hs_adv_fields fields{};fields.flags=BLE_HS_ADV_F_DISC_GEN|BLE_HS_ADV_F_BREDR_UNSUP;
   fields.uuids128=const_cast<ble_uuid128_t*>(&uuid1);fields.num_uuids128=1;fields.uuids128_is_complete=1;
   int rc=ble_gap_adv_set_fields(&fields);if(rc)return;
-  ble_hs_adv_fields response{};response.name=(uint8_t*)BLE_DEVICE_NAME;response.name_len=strlen(BLE_DEVICE_NAME);response.name_is_complete=1;
+  ble_hs_adv_fields response{};response.name=(uint8_t*)bleDeviceName;response.name_len=strlen(bleDeviceName);response.name_is_complete=1;
   if(ble_gap_adv_rsp_set_fields(&response)!=0)return;
   ble_gap_adv_params params{};params.conn_mode=BLE_GAP_CONN_MODE_UND;params.disc_mode=BLE_GAP_DISC_MODE_GEN;
   params.itvl_min=160;params.itvl_max=240;
   rc=ble_gap_adv_start(ownType,nullptr,BLE_HS_FOREVER,&params,gapEvent,nullptr);
-  if(!rc)Serial.print("[BLE] Door-12 advertising on Matter's NimBLE host\r\n");
+  if(!rc){doorAdvertising=true;Serial.printf("[BLE] %s advertising on Matter's NimBLE host\r\n",bleDeviceName);}
   else Serial.printf("[BLE] Advertising retry, rc=%d\r\n",rc);
 }
 void printPairing(){
   Serial.printf("[PAIR] Manual code: %s\r\n",Matter.getManualPairingCode().c_str());
   Serial.printf("[PAIR] QR URL: %s\r\n",Matter.getOnboardingQRCodeUrl().c_str());
 }
+bool validPublicKey(const uint8_t pub[65]) {
+ mbedtls_ecp_group g;mbedtls_ecp_point p;mbedtls_ecp_group_init(&g);mbedtls_ecp_point_init(&p);
+ int rc=mbedtls_ecp_group_load(&g,MBEDTLS_ECP_DP_SECP256R1);
+ if(!rc)rc=mbedtls_ecp_point_read_binary(&g,&p,pub,65);
+ if(!rc)rc=mbedtls_ecp_check_pubkey(&g,&p);
+ mbedtls_ecp_point_free(&p);mbedtls_ecp_group_free(&g);return rc==0;
+}
+void printIdentity(){
+ Serial.printf("[IDENTITY] Door ID=%u BLE=%s Protocol=2\r\n",DOOR_ID,bleDeviceName);
+ Serial.print("[IDENTITY] ESP32 public key: ");for(uint8_t b:doorPublic)Serial.printf("%02x",b);Serial.print("\r\n");
+ Serial.print("[IDENTITY] Manager SHA256: ");uint8_t digest[32];hash(issuerPublic,65,digest);
+ if(issuerConfigured){for(uint8_t b:digest)Serial.printf("%02x",b);}else Serial.print("UNCONFIGURED");Serial.print("\r\n");
+}
+bool loadIdentity(){
+ Preferences p;if(!p.begin("doorkey-device",false))return false;
+ if(p.isKey("private")&&p.getBytesLength("private")!=32){p.end();return false;}
+ bool saved=p.getBytesLength("private")==32;
+ if(saved)p.getBytes("private",doorPrivate,32);
+ mbedtls_ecp_group g;mbedtls_ecp_point q;mbedtls_mpi d;mbedtls_ecp_group_init(&g);mbedtls_ecp_point_init(&q);mbedtls_mpi_init(&d);
+ int rc=mbedtls_ecp_group_load(&g,MBEDTLS_ECP_DP_SECP256R1);
+ if(!saved){
+  if(!rc)rc=mbedtls_ecp_gen_privkey(&g,&d,rng,nullptr);
+  if(!rc)rc=mbedtls_mpi_write_binary(&d,doorPrivate,32);
+ }
+ if(!rc)rc=mbedtls_mpi_read_binary(&d,doorPrivate,32);
+ if(!rc)rc=mbedtls_ecp_check_privkey(&g,&d);
+ if(!rc)rc=mbedtls_ecp_mul(&g,&q,&d,&g.G,rng,nullptr);
+ size_t length=0;if(!rc)rc=mbedtls_ecp_point_write_binary(&g,&q,MBEDTLS_ECP_PF_UNCOMPRESSED,&length,doorPublic,65);
+ if(!rc&&!saved&&p.putBytes("private",doorPrivate,32)!=32)rc=-1;
+ if(!rc){
+  String initialName=p.getString("initial_name","");
+  if(!ReaderSettings::validName(initialName.c_str(),initialName.length())){
+   uint8_t digest[32];hash(doorPublic,65,digest);
+   char generated[16];snprintf(generated,sizeof(generated),"Door-%02X%02X",digest[0],digest[1]);initialName=generated;
+   if(p.putString("initial_name",initialName)!=initialName.length())rc=-1;
+  }
+  if(!rc)strlcpy(bleDeviceName,initialName.c_str(),sizeof(bleDeviceName));
+ }
+ p.end();mbedtls_mpi_free(&d);mbedtls_ecp_point_free(&q);mbedtls_ecp_group_free(&g);return rc==0;
+}
+void readMatterConfig(){
+ chip::DeviceLayer::SystemLayer().ScheduleLambda([](){
+  auto* provider=chip::DeviceLayer::GetDeviceInfoProvider();
+  auto* it=provider?provider->IterateUserLabel(accessSwitch.getEndPointId()):nullptr;
+  if(it){
+   char parts[4][31]{};size_t lengths[4]{};unsigned mask=0;bool valid=true;
+   chip::DeviceLayer::DeviceInfoProvider::UserLabelType item;
+   while(it->Next(item)){
+    auto label=item.label;auto value=item.value;
+    if(label.size()<2||label.size()>16||value.size()>16||label.data()[0]!='D'||label.data()[1]<'0'||label.data()[1]>'3'){valid=false;break;}
+    unsigned index=label.data()[1]-'0';if(mask&(1u<<index)){valid=false;break;}mask|=1u<<index;
+    lengths[index]=label.size()-2+value.size();memcpy(parts[index],label.data()+2,label.size()-2);memcpy(parts[index]+label.size()-2,value.data(),value.size());
+   }
+   it->Release();
+   if(valid&&mask==15){ConfigSnapshot snapshot{};for(unsigned i=0;i<4;i++){memcpy(snapshot.payload+snapshot.length,parts[i],lengths[i]);snapshot.length+=lengths[i];}xQueueOverwrite(configEvents,&snapshot);}
+  }
+  configReadPending.store(false);
+ });
+}
+void applyConfig(const char* payload,size_t length,bool persist){
+ char name[30];uint8_t key[65];
+ if(!ReaderSettings::decode(payload,length,name,key)||!validPublicKey(key))return;
+ if(issuerConfigured&&!strcmp(name,bleDeviceName)&&!memcmp(key,issuerPublic,65))return;
+ if(persist){Preferences p;if(!p.begin("doorkey-config",false))return;size_t written=p.putBytes("settings",payload,length);p.end();if(written!=length){Serial.print("[CONFIG] NVS write failed\r\n");return;}}
+ // Any trust or name change cancels the in-flight authorization and disconnects the phone.
+ challengeValid=false;receiving=false;packetLength=0;clientReady=false;
+ memcpy(bleDeviceName,name,strlen(name)+1);memcpy(issuerPublic,key,65);issuerConfigured=true;
+ if(linked)ble_gap_terminate(connection,BLE_ERR_REM_USER_CONN_TERM);
+ if(doorAdvertising&&!commissioningWindow.load()){ble_gap_adv_stop();doorAdvertising=false;}
+ if(ble_hs_synced())ble_svc_gap_device_name_set(bleDeviceName);
+ Serial.printf("[CONFIG] Saved BLE name=%s and Manager public key\r\n",bleDeviceName);printIdentity();
+}
 void setup(){
   Serial.begin(115200);delay(1500);events=xQueueCreate(32,sizeof(Event));
-  if(!events){while(true)delay(1000);}
+  configEvents=xQueueCreate(1,sizeof(ConfigSnapshot));
+  if(!events||!configEvents){while(true)delay(1000);}
+  bootloader_random_enable();
+  if(!loadIdentity()){Serial.print("[FATAL] Device identity storage/crypto failure\r\n");while(true)delay(1000);}
+  bootloader_random_disable();
+  Preferences configPrefs;if(configPrefs.begin("doorkey-config",true)){
+   ConfigSnapshot saved{};saved.length=configPrefs.getBytesLength("settings");
+   if(saved.length&&saved.length<=120){configPrefs.getBytes("settings",saved.payload,saved.length);applyConfig(saved.payload,saved.length,false);}configPrefs.end();
+  }
+  printIdentity();
   gate.threshold=PROXIMITY_THRESHOLD;
   Serial.printf("\r\n[BOOT] DoorKey H2 Matter/Thread + BLE | flash=%u\r\n",ESP.getFlashChipSize());
   if(ESP.getFlashChipSize()<4*1024*1024){Serial.print("[FATAL] This build needs 4 MB flash\r\n");while(true)delay(1000);}
   Matter.selectNetwork(MATTER_NETWORK_THREAD);
   Matter.setBLEMemoryReleaseEnabled(false);
-  Matter.setVendorName("DoorKey Prototype");Matter.setProductName("BLE Access Button");Matter.setDeviceName("Door-12 Access");
+  Matter.setVendorName("DoorKey Prototype");Matter.setProductName("BLE Access Button");Matter.setDeviceName(bleDeviceName);
   bootloader_random_enable();
   Preferences prefs;prefs.begin("doorkey-setup",false);
   uint32_t passcode=prefs.getUInt("pin",0);
@@ -238,11 +333,13 @@ void setup(){
     Serial.print("[FATAL] Matter switch endpoint\r\n");while(true)delay(1000);
   }
   Matter.onEvent([](matterEvent_t type,const chip::DeviceLayer::ChipDeviceEvent*){
+    if(type==MATTER_COMMISSIONING_WINDOW_OPEN)commissioningWindow.store(true);
+    if(type==MATTER_COMMISSIONING_WINDOW_CLOSED)commissioningWindow.store(false);
     commissioned.store(Matter.isDeviceCommissioned());threadAttached.store(Matter.isThreadConnected());
     Serial.printf("[MATTER] event=%u\r\n",unsigned(type));
   });
   Matter.begin();result("IDLE");printPairing();
-  Serial.print("[INFO] Pair Matter first. Door BLE starts after Thread attachment. Commands: PAIR / STATUS / THRESH -30 / FACTORY RESET\r\n");
+  Serial.print("[INFO] Pair Matter first. Door BLE starts after Thread attachment. Commands: PAIR / STATUS / IDENTITY / THRESH -30 / FACTORY RESET\r\n");
 }
 void loop(){
   static uint32_t lastState=0;
@@ -255,6 +352,9 @@ void loop(){
   bool c=commissioned.load(),t=threadAttached.load();
   static bool oldC=false,oldT=false;
   if(c!=oldC || t!=oldT){oldC=c;oldT=t;Serial.printf("[MATTER] commissioned=%d thread=%d\r\n",c,t);}
+  ConfigSnapshot configUpdate{};if(xQueueReceive(configEvents,&configUpdate,0)==pdTRUE)applyConfig(configUpdate.payload,configUpdate.length,true);
+  static uint32_t lastConfigRead=0;
+  if(c&&millis()-lastConfigRead>=1000&&!configReadPending.exchange(true)){lastConfigRead=millis();readMatterConfig();}
   Event e;
   while(xQueueReceive(events,&e,0)==pdTRUE){
     if(e.kind==1){
@@ -290,7 +390,8 @@ void loop(){
     char ch=Serial.read();
     if(ch=='\n'||ch=='\r'){
       if(line=="PAIR")printPairing();
-      else if(line=="STATUS")Serial.printf("[STATUS] Matter=%d Thread=%d BLE=%d heap=%u\r\n",c,t,linked,ESP.getFreeHeap());
+      else if(line=="IDENTITY")printIdentity();
+      else if(line=="STATUS"){printIdentity();Serial.printf("[STATUS] Matter=%d Thread=%d BLE=%d heap=%u\r\n",c,t,linked,ESP.getFreeHeap());}
       else if(line=="FACTORY RESET"){Serial.print("[RESET] Removing Matter/Thread enrollment\r\n");Matter.decommission();}
       else if(line.startsWith("THRESH ")){
         int v=line.substring(7).toInt();
