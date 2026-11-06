@@ -302,7 +302,9 @@ void applyConfig(const char* payload,size_t length,bool persist){
  memcpy(bleDeviceName,name,strlen(name)+1);memcpy(issuerPublic,key,65);issuerConfigured=true;
  if(linked)ble_gap_terminate(connection,BLE_ERR_REM_USER_CONN_TERM);
  if(doorAdvertising&&!commissioningWindow.load()){ble_gap_adv_stop();doorAdvertising=false;}
- if(ble_hs_synced())ble_svc_gap_device_name_set(bleDeviceName);
+ // Restoring NVS settings runs before Matter initializes NimBLE. Even
+ // ble_hs_synced() requires an initialized host; only runtime writes may call it.
+ if(persist && ble_hs_synced())ble_svc_gap_device_name_set(bleDeviceName);
  Serial.printf("[CONFIG] Saved BLE name=%s and Manager public key\r\n",bleDeviceName);printIdentity();
 }
 void setup(){
